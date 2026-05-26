@@ -92,6 +92,35 @@ For non-body parts (doors, exhausts, chrome details) that don't participate in t
 
 ---
 
+### `patch_ress.py`
+
+Patches a Unity `.resS` file with a new texture image (RGB24 with full mip chain).
+
+FUMES stores most vehicle textures (albedo, carpaint mask, skins) in `sharedassets0.assets.resS` as raw RGB24 data. UABEA can't edit `.resS` directly — use this script to write a new PNG into the correct offset.
+
+```
+python patch_ress.py <input.png> <ress_file> <offset> [--size 512] [--flip-y]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--size N` | Base texture size in pixels (default 512). Must match what the asset expects. |
+| `--flip-y` | Extra vertical flip — try if the texture appears upside-down in-game. |
+
+**Example:**
+
+```powershell
+# Replace the Flakwagon albedo texture
+python patch_ress.py "fw-textures\AlbedoTexture.png" `
+  "FUMES_Data\sharedassets0.assets.resS" 16242104 --size 512
+```
+
+**Finding the offset:** Open the texture asset in UABEA, look at the `m_StreamData` field — it contains the offset into the `.resS` file and the expected byte size. The size for a 512×512 RGB24 texture with 10 mip levels is always 1 048 575 bytes.
+
+---
+
 ## Caro submesh layout (reference)
 
 **CaroBody** (asset 2410):
