@@ -360,6 +360,10 @@ def parse_obj(path):
         elif cmd == 'g':
             cur = parts[1] if len(parts) > 1 else '__default__'
             groups.setdefault(cur, [])
+        elif cmd == 'usemtl':
+            # Treat usemtl as group separator when Blender exports without g lines
+            cur = parts[1] if len(parts) > 1 else '__default__'
+            groups.setdefault(cur, [])
         elif cmd == 'f':
             if cur is None:
                 cur = '__default__'     # faces before any 'g' line
@@ -376,11 +380,17 @@ def parse_obj(path):
 
     return raw_pos, raw_norm, raw_uv, groups
 
-def expand_vertices(raw_pos, raw_norm, raw_uv, groups):
+def expand_vertices(raw_pos, raw_norm, raw_uv, groups, flip_v=True):
     """
     OBJ uses per-corner v/vt/vn indices; Unity needs a unified vertex buffer.
     Out-of-range indices are clamped to the nearest valid vertex.
     Returns positions, normals, uvs, submesh_index_lists (one per group).
+
+    flip_v=True  (default): V = 1-v_obj — correct for standard OBJ (V=0 at bottom)
+                             and for OBJs produced by dump2obj.
+    flip_v=False: V = v_obj as-is — use when the OBJ was exported with Unity/DirectX
+                  convention already applied (V=0 at top), e.g. Blender exports where
+                  the artist manually matched Unity UV space.
     """
     n_pos  = len(raw_pos)
     n_norm = len(raw_norm)
@@ -403,7 +413,7 @@ def expand_vertices(raw_pos, raw_norm, raw_uv, groups):
             if has_norm: normals.append(raw_norm[vni])
             if has_uv:
                 u, v_obj = raw_uv[vti]
-                uvs.append((u, 1.0 - v_obj))   # flip V back to Unity convention
+                uvs.append((u, 1.0 - v_obj if flip_v else v_obj))
         return vertex_map[key]
 
     submesh_index_lists = []
@@ -486,7 +496,7 @@ def _update_submeshes(lines, submesh_index_lists, positions, index_format):
         s = line.strip()
 
         if 'SubMesh data' in s:
-            sm_idx  = min(sm_idx + 1, n - 1)
+            sm_idx  += 1
             in_sm   = True
             pv_state = None; pv_axes = {}
 
@@ -521,7 +531,7 @@ def _update_submeshes(lines, submesh_index_lists, positions, index_format):
 
 # ── obj2dump ───────────────────────────────────────────────────────────────────
 
-def obj2dump(obj_path, template_path, out_path):
+def obj2dump(obj_path, template_path, out_path, flip_v=True):
     mesh, template_lines = parse_dump(template_path)
 
     if not mesh['channels']:
@@ -532,7 +542,14 @@ def obj2dump(obj_path, template_path, out_path):
         sys.exit('[obj2dump] No geometry (g groups) found in OBJ.')
 
     positions, normals, uvs, submesh_index_lists = expand_vertices(
-        raw_pos, raw_norm, raw_uv, groups)
+        raw_pos, raw_norm, raw_uv, groups, flip_v=flip_v)
+
+    # Pad to template submesh count with degenerate triangles
+    n_template = len(mesh['submeshes'])
+    if len(submesh_index_lists) < n_template:
+        pad = n_template - len(submesh_index_lists)
+        submesh_index_lists += [[0, 0, 0]] * pad
+        print(f'[obj2dump] Padding {pad} missing submesh(es) with degenerate triangles')
 
     n_tris = sum(len(g) // 3 for g in submesh_index_lists)
     print(f'[obj2dump] {len(positions)} unified verts  {n_tris} tris  '
@@ -657,6 +674,9 @@ def main():
     p2.add_argument('obj',      help='Input OBJ')
     p2.add_argument('template', help='Original UABEA dump (channel layout + metadata source)')
     p2.add_argument('output',   help='Output UABEA dump')
+    p2.add_argument('--no-v-flip', action='store_true',
+                    help='Do not flip V coordinate (use when OBJ was exported with Unity/DirectX '
+                         'V convention: V=0 at top). Default flips V assuming standard OBJ convention.')
 
     p4 = sub.add_parser('fix_submeshes',
                         help='Keep submesh 0 geometry, make submeshes 1-N degenerate (fixes Z-fighting body meshes)')
@@ -671,7 +691,7 @@ def main():
     if args.cmd == 'dump2obj':
         dump2obj(args.dump, args.obj)
     elif args.cmd == 'obj2dump':
-        obj2dump(args.obj, args.template, args.output)
+        obj2dump(args.obj, args.template, args.output, flip_v=not args.no_v_flip)
     elif args.cmd == 'fix_submeshes':
         fix_submeshes(args.dump, args.output)
     else:
